@@ -164,6 +164,58 @@ else:
         st.error(f"Erro ao executar a consulta otimizada: {e}")
         df_geral = pd.DataFrame()
 
+@st.fragment
+def renderizar_aba_ia(df_dados):
+    st.markdown("### Consultoria Estratégica com Gemini AI")
+    st.write("Gere um relatório executivo com recomendações de abordagem e ajustes de campanha baseados nos dados atuais filtrados no painel.")
+    
+    if "relatorio_ia" not in st.session_state:
+        st.session_state.relatorio_ia = None
+
+    if st.button("🧠 Gerar Plano de Ação para a Diretoria", type="primary"):
+        with st.spinner("Analisando dados da base e gerando insights operacionais..."):
+            try:
+                total_leads_ia = len(df_dados)
+                taxa_qual_ia = (len(df_dados[df_dados['qualificou'] == 1]) / total_leads_ia) * 100 if total_leads_ia > 0 else 0
+                top_estado = df_dados['estado'].mode()[0] if not df_dados.empty else "N/A"
+                top_dor = df_dados['dor_cliente'].mode()[0] if not df_dados.empty else "N/A"
+                gap_financeiro = df_dados['expectativa_ganho'].mean() - df_dados['previsao_ganho'].mean()
+                rota_dominante = df_dados['rota'].mode()[0] if not df_dados.empty else "N/A"
+                
+                prompt_estrategico = f"""
+                Você é um Diretor de Inteligência Comercial (RevOps) em uma empresa que faz leasing de caminhões para motoristas nos EUA (Owner-Operators).
+                Analise os seguintes dados em tempo real da nossa captação de leads e crie um plano de ação tático com 3 tópicos diretos e acionáveis para o time de SDRs e Marketing.
+                
+                Métricas atuais do funil (Base de {total_leads_ia} leads):
+                - Taxa de Qualificação Geral: {taxa_qual_ia:.1f}%
+                - Região/Estado de Maior Volume: {top_estado}
+                - Rota Preferida: {rota_dominante}
+                - Principal Objeção/Dor dos Motoristas: {top_dor}
+                - Gap Financeiro Médio (Expectativa do Lead vs Nossa Previsão): ${gap_financeiro:.2f}
+                
+                Estruture sua resposta em Markdown com:
+                1. Diagnóstico Rápido (O que esses números significam).
+                2. Ajuste de Discurso para SDRs (Como contornar a principal dor considerando o Gap Financeiro).
+                3. Direcionamento de Marketing (Onde focar as próximas campanhas geográficas e de equipamento).
+                
+                Seja direto, focado em vendas B2B e use jargões de logística norte-americana quando fizer sentido.
+                """
+                
+                interaction = client.interactions.create(
+                    model="gemini-3.8-flash",
+                    input=prompt_estrategico
+                )
+                
+                st.session_state.relatorio_ia = interaction.output_text
+                st.success("Análise concluída com sucesso!")
+                
+            except Exception as e:
+                st.error(f"Erro ao comunicar com a API do Gemini: {e}. Verifique sua API Key e conexão.")
+    
+    if st.session_state.relatorio_ia:
+        st.markdown("---")
+        st.markdown(st.session_state.relatorio_ia)
+
 if not df_geral.empty:
     df_geral['criado_em'] = pd.to_datetime(df_geral['criado_em'])
     df_geral['data_criacao'] = df_geral['criado_em'].dt.date
@@ -502,54 +554,6 @@ if not df_geral.empty:
                 st.plotly_chart(fig_folgas_rota, use_container_width=True)
 
         with tab6:
-            st.markdown("### Consultoria Estratégica com Gemini AI")
-            st.write("Gere um relatório executivo com recomendações de abordagem e ajustes de campanha baseados nos dados atuais filtrados no painel.")
-            
-            if "relatorio_ia" not in st.session_state:
-                st.session_state.relatorio_ia = None
-
-            if st.button("🧠 Gerar Plano de Ação para a Diretoria", type="primary"):
-                with st.spinner("Analisando dados da base e gerando insights operacionais..."):
-                    try:
-                        total_leads_ia = len(df_filtrado)
-                        taxa_qual_ia = (len(df_filtrado[df_filtrado['qualificou'] == 1]) / total_leads_ia) * 100 if total_leads_ia > 0 else 0
-                        top_estado = df_filtrado['estado'].mode()[0] if not df_filtrado.empty else "N/A"
-                        top_dor = df_filtrado['dor_cliente'].mode()[0] if not df_filtrado.empty else "N/A"
-                        gap_financeiro = df_filtrado['expectativa_ganho'].mean() - df_filtrado['previsao_ganho'].mean()
-                        rota_dominante = df_filtrado['rota'].mode()[0] if not df_filtrado.empty else "N/A"
-                        
-                        prompt_estrategico = f"""
-                        Você é um Diretor de Inteligência Comercial (RevOps) em uma empresa que faz leasing de caminhões para motoristas nos EUA (Owner-Operators).
-                        Analise os seguintes dados em tempo real da nossa captação de leads e crie um plano de ação tático com 3 tópicos diretos e acionáveis para o time de SDRs e Marketing.
-                        
-                        Métricas atuais do funil (Base de {total_leads_ia} leads):
-                        - Taxa de Qualificação Geral: {taxa_qual_ia:.1f}%
-                        - Região/Estado de Maior Volume: {top_estado}
-                        - Rota Preferida: {rota_dominante}
-                        - Principal Objeção/Dor dos Motoristas: {top_dor}
-                        - Gap Financeiro Médio (Expectativa do Lead vs Nossa Previsão): ${gap_financeiro:.2f}
-                        
-                        Estruture sua resposta em Markdown com:
-                        1. Diagnóstico Rápido (O que esses números significam).
-                        2. Ajuste de Discurso para SDRs (Como contornar a principal dor considerando o Gap Financeiro).
-                        3. Direcionamento de Marketing (Onde focar as próximas campanhas geográficas e de equipamento).
-                        
-                        Seja direto, focado em vendas B2B e use jargões de logística norte-americana quando fizer sentido.
-                        """
-                        
-                        interaction = client.interactions.create(
-                            model="gemini-3.8-flash",
-                            input=prompt_estrategico
-                        )
-                        
-                        st.session_state.relatorio_ia = interaction.output_text
-                        st.success("Análise concluída com sucesso!")
-                        
-                    except Exception as e:
-                        st.error(f"Erro ao comunicar com a API do Gemini: {e}. Verifique sua API Key e conexão.")
-            
-            if st.session_state.relatorio_ia:
-                st.markdown("---")
-                st.markdown(st.session_state.relatorio_ia)
+            renderizar_aba_ia(df_filtrado)
 else:
     st.warning("Nenhum dado encontrado na base de dados para construir o painel.")
