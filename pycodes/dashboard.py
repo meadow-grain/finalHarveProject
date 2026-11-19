@@ -3,14 +3,17 @@ import pandas as pd
 from sqlalchemy import create_engine
 from streamlit_autorefresh import st_autorefresh
 import plotly.express as px
-from google import genai
 import datetime
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingRegressor
+from sklearn.metrics import accuracy_score, precision_score, recall_score, r2_score, mean_absolute_error
 
 st_autorefresh(interval=30000, limit=None, key="atualizacao_leads") 
 
 st.set_page_config(page_title="Dashboard - Leasing", page_icon="📊", layout="wide")
-
-client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
 st.title("📊 Painel de Inteligência Comercial (Live)")
 
@@ -164,57 +167,184 @@ else:
         st.error(f"Erro ao executar a consulta otimizada: {e}")
         df_geral = pd.DataFrame()
 
-@st.fragment
-def renderizar_aba_ia(df_dados):
-    st.markdown("### Consultoria Estratégica com Gemini AI")
-    st.write("Gere um relatório executivo com recomendações de abordagem e ajustes de campanha baseados nos dados atuais filtrados no painel.")
+@st.cache_resource(ttl=300)
+def treinar_modelos_ml(df_treino):
+    features_cat = ['estado', 'trailer', 'rota', 'dor_cliente']
+    features_num_clf = ['anos_cdl', 'folgas', 'milhas', 'expectativa_ganho', 'empregado']
     
-    if "relatorio_ia" not in st.session_state:
-        st.session_state.relatorio_ia = None
+    df_clean = df_treino.dropna(subset=features_cat + features_num_clf + ['qualificou']).copy()
+    df_clean['empregado'] = df_clean['empregado'].astype(int)
+    df_clean['qualificou'] = df_clean['qualificou'].astype(int)
 
-    if st.button("🧠 Gerar Plano de Ação para a Diretoria", type="primary"):
-        with st.spinner("Analisando dados da base e gerando insights operacionais..."):
-            try:
-                total_leads_ia = len(df_dados)
-                taxa_qual_ia = (len(df_dados[df_dados['qualificou'] == 1]) / total_leads_ia) * 100 if total_leads_ia > 0 else 0
-                top_estado = df_dados['estado'].mode()[0] if not df_dados.empty else "N/A"
-                top_dor = df_dados['dor_cliente'].mode()[0] if not df_dados.empty else "N/A"
-                gap_financeiro = df_dados['expectativa_ganho'].mean() - df_dados['previsao_ganho'].mean()
-                rota_dominante = df_dados['rota'].mode()[0] if not df_dados.empty else "N/A"
-                
-                prompt_estrategico = f"""
-                Você é um Diretor de Inteligência Comercial (RevOps) em uma empresa que faz leasing de caminhões para motoristas nos EUA (Owner-Operators).
-                Analise os seguintes dados em tempo real da nossa captação de leads e crie um plano de ação tático com 3 tópicos diretos e acionáveis para o time de SDRs e Marketing.
-                
-                Métricas atuais do funil (Base de {total_leads_ia} leads):
-                - Taxa de Qualificação Geral: {taxa_qual_ia:.1f}%
-                - Região/Estado de Maior Volume: {top_estado}
-                - Rota Preferida: {rota_dominante}
-                - Principal Objeção/Dor dos Motoristas: {top_dor}
-                - Gap Financeiro Médio (Expectativa do Lead vs Nossa Previsão): ${gap_financeiro:.2f}
-                
-                Estruture sua resposta em Markdown com:
-                1. Diagnóstico Rápido (O que esses números significam).
-                2. Ajuste de Discurso para SDRs (Como contornar a principal dor considerando o Gap Financeiro).
-                3. Direcionamento de Marketing (Onde focar as próximas campanhas geográficas e de equipamento).
-                
-                Seja direto, focado em vendas B2B e use jargões de logística norte-americana quando fizer sentido.
-                """
-                
-                interaction = client.interactions.create(
-                    model="gemini-3.8-flash",
-                    input=prompt_estrategico
-                )
-                
-                st.session_state.relatorio_ia = interaction.output_text
-                st.success("Análise concluída com sucesso!")
-                
-            except Exception as e:
-                st.error(f"Erro ao comunicar com a API do Gemini: {e}. Verifique sua API Key e conexão.")
-    
-    if st.session_state.relatorio_ia:
-        st.markdown("---")
-        st.markdown(st.session_state.relatorio_ia)
+    X_clf = df_clean[features_cat + features_num_clf]
+    y_clf = df_clean['qualificou']
+
+    X_train_c, X_test_c, y_train_c, y_test_c = train_test_split(
+        X_clf, y_clf, test_size=0.2, random_state=42, stratify=y_clf
+    )
+
+    preprocessor_clf = ColumnTransformer(
+        transformers=[
+            ('cat', OneHotEncoder(handle_unknown='ignore'), features_cat),
+            ('num', StandardScaler(), features_num_clf)
+        ]
+    )
+
+    pipeline_clf = Pipeline(steps=[
+        ('preprocessor', preprocessor_clf),
+        ('classifier', RandomForestClassifier(n_estimators=150, max_depth=12, random_state=42, n_jobs=-1))
+    ])
+
+    pipeline_clf.fit(X_train_c, y_train_c)
+    y_pred_c = pipeline_clf.predict(X_test_c)
+
+    metricas_clf = {
+        'acuracia': accuracy_score(y_test_c, y_pred_c) * 100,
+        'precisao': precision_score(y_test_c, y_pred_c, zero_division=0) * 100,
+        'recall': recall_score(y_test_c, y_pred_c, zero_division=0) * 100
+    }
+
+    ohe_features = pipeline_clf.named_steps['preprocessor'].named_transformers_['cat'].get_feature_names_out(features_cat)
+    todas_features = list(ohe_features) + features_num_clf
+    importancias = pipeline_clf.named_steps['classifier'].feature_importances_
+    df_imp = pd.DataFrame({'Feature': todas_features, 'Importância': importancias}).sort_values(by='Importância', ascending=False).head(10)
+
+    features_num_reg = ['anos_cdl', 'folgas', 'milhas', 'empregado']
+    X_reg = df_clean[features_cat + features_num_reg]
+    y_reg = df_clean['expectativa_ganho']
+
+    X_train_r, X_test_r, y_train_r, y_test_r = train_test_split(
+        X_reg, y_reg, test_size=0.2, random_state=42
+    )
+
+    preprocessor_reg = ColumnTransformer(
+        transformers=[
+            ('cat', OneHotEncoder(handle_unknown='ignore'), features_cat),
+            ('num', StandardScaler(), features_num_reg)
+        ]
+    )
+
+    pipeline_reg = Pipeline(steps=[
+        ('preprocessor', preprocessor_reg),
+        ('regressor', GradientBoostingRegressor(n_estimators=150, learning_rate=0.08, max_depth=5, random_state=42))
+    ])
+
+    pipeline_reg.fit(X_train_r, y_train_r)
+    y_pred_r = pipeline_reg.predict(X_test_r)
+
+    metricas_reg = {
+        'r2': r2_score(y_test_r, y_pred_r),
+        'mae': mean_absolute_error(y_test_r, y_pred_r)
+    }
+
+    return pipeline_clf, metricas_clf, df_imp, pipeline_reg, metricas_reg
+
+@st.fragment
+def renderizar_aba_ml(df_dados):
+    st.markdown("### 🤖 Laboratório Preditivo & Lead Scoring (Scikit-Learn)")
+    st.write("Modelos supervisionados treinados sobre o histórico da operação para prever a propensão de qualificação e a expectativa salarial de novos motoristas.")
+
+    if len(df_dados) < 50 or df_dados['qualificou'].nunique() < 2:
+        st.warning("Volume de dados insuficiente ou apenas uma classe presente nos filtros atuais para treinar os modelos (mínimo de 50 leads com aprovados e reprovados).")
+        return
+
+    with st.spinner("Treinando pipelines de Machine Learning..."):
+        clf_model, metricas_clf, df_imp, reg_model, metricas_reg = treinar_modelos_ml(df_dados)
+
+    st.markdown("#### 📊 Performance dos Modelos (Validação 80/20)")
+    m1, m2, m3, m4, m5 = st.columns(5)
+    with m1:
+        st.metric("Acurácia (Random Forest)", f"{metricas_clf['acuracia']:.1f}%")
+    with m2:
+        st.metric("Precisão (Qualificação)", f"{metricas_clf['precisao']:.1f}%")
+    with m3:
+        st.metric("Recall (Sensibilidade)", f"{metricas_clf['recall']:.1f}%")
+    with m4:
+        st.metric("R² (Gradient Boosting)", f"{metricas_reg['r2']:.2f}")
+    with m5:
+        st.metric("Erro Médio Absoluto (MAE)", f"${metricas_reg['mae']:,.2f}")
+
+    st.markdown("---")
+    st.markdown("#### 🎯 Simulador de Pré-Qualificação de Lead")
+
+    col_in1, col_in2, col_in3 = st.columns(3)
+    with col_in1:
+        sim_estado = st.selectbox("Estado (UF)", sorted(df_dados['estado'].unique()))
+        sim_cdl = st.number_input("Anos de CDL", min_value=0, max_value=45, value=5)
+        sim_empregado = st.selectbox("Situação Atual", ["Empregado", "Desempregado"])
+    with col_in2:
+        sim_rota = st.selectbox("Rota Pretendida", sorted(df_dados['rota'].unique()))
+        sim_trailer = st.selectbox("Tipo de Equipamento", sorted(df_dados['trailer'].unique()))
+        sim_dor = st.selectbox("Principal Dor / Motivação", sorted(df_dados['dor_cliente'].unique()))
+    with col_in3:
+        sim_milhas = st.slider("Milhas Semanais Estimadas", min_value=300, max_value=3500, value=2400, step=50)
+        sim_folgas = st.slider("Dias de Folga no Mês", min_value=1, max_value=15, value=4)
+        sim_expectativa = st.number_input("Expectativa Informada pelo Lead ($)", min_value=500.0, max_value=6000.0, value=2000.0, step=50.0)
+
+    emp_bin = 1 if sim_empregado == "Empregado" else 0
+
+    entrada_clf = pd.DataFrame([{
+        'estado': sim_estado,
+        'trailer': sim_trailer,
+        'rota': sim_rota,
+        'dor_cliente': sim_dor,
+        'anos_cdl': sim_cdl,
+        'folgas': sim_folgas,
+        'milhas': sim_milhas,
+        'expectativa_ganho': sim_expectativa,
+        'empregado': emp_bin
+    }])
+
+    entrada_reg = pd.DataFrame([{
+        'estado': sim_estado,
+        'trailer': sim_trailer,
+        'rota': sim_rota,
+        'dor_cliente': sim_dor,
+        'anos_cdl': sim_cdl,
+        'folgas': sim_folgas,
+        'milhas': sim_milhas,
+        'empregado': emp_bin
+    }])
+
+    prob_qualificacao = clf_model.predict_proba(entrada_clf)[0][1] * 100
+    expectativa_estimada = reg_model.predict(entrada_reg)[0]
+    diferenca_exp = sim_expectativa - expectativa_estimada
+
+    st.markdown("---")
+    res1, res2 = st.columns(2)
+
+    with res1:
+        st.markdown("##### Score de Qualificação (Random Forest)")
+        if prob_qualificacao >= 70:
+            st.success(f"🔥 **Alta Propensão de Fechamento:** {prob_qualificacao:.1f}%")
+        elif prob_qualificacao >= 40:
+            st.warning(f"⚠️ **Média Propensão (Requer Contorno de Objeção):** {prob_qualificacao:.1f}%")
+        else:
+            st.error(f"❄️ **Baixa Propensão de Qualificação:** {prob_qualificacao:.1f}%")
+        st.progress(int(prob_qualificacao))
+
+    with res2:
+        st.markdown("##### Benchmark Salarial do Perfil (Gradient Boosting)")
+        st.info(f"💰 **Expectativa Típica para este Perfil:** ${expectativa_estimada:,.2f}")
+        if diferenca_exp > 200:
+            st.caption(f"O motorista está pedindo **${diferenca_exp:,.2f} acima** da média histórica de perfis semelhantes.")
+        elif diferenca_exp < -200:
+            st.caption(f"O motorista está pedindo **${abs(diferenca_exp):,.2f} abaixo** da média histórica (alta margem de negociação).")
+        else:
+            st.caption("A expectativa do motorista está alinhada com o padrão de mercado para este perfil.")
+
+    st.markdown("---")
+    fig_imp = px.bar(
+        df_imp.sort_values(by='Importância', ascending=True),
+        x='Importância',
+        y='Feature',
+        orientation='h',
+        title="Top 10 Variáveis Mais Relevantes na Decisão do Modelo (Feature Importance)",
+        color='Importância',
+        color_continuous_scale='Blues'
+    )
+    fig_imp.update_layout(xaxis_title="Peso Relativo (Gini Importance)", yaxis_title="Variável")
+    st.plotly_chart(fig_imp, use_container_width=True)
 
 if not df_geral.empty:
     df_geral['criado_em'] = pd.to_datetime(df_geral['criado_em'])
@@ -246,7 +376,7 @@ if not df_geral.empty:
             "Raio-X do ICP", 
             "Gap Financeiro", 
             "Desempenho Operacional",
-            "✨ Plano de Ação (IA)"
+            "🤖 Previsões (ML)"
         ])
         
         with tab1:
@@ -554,6 +684,6 @@ if not df_geral.empty:
                 st.plotly_chart(fig_folgas_rota, use_container_width=True)
 
         with tab6:
-            renderizar_aba_ia(df_filtrado)
+            renderizar_aba_ml(df_geral)
 else:
     st.warning("Nenhum dado encontrado na base de dados para construir o painel.")
