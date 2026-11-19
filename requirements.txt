@@ -4,4 +4,4 @@ sqlalchemy
 pymysql
 streamlit-autorefresh
 plotly
-google-genai
+scikit-learn
