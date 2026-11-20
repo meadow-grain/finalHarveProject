@@ -14,19 +14,19 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import accuracy_score, precision_score, recall_score, r2_score, mean_absolute_error
 
-# Eu configuro o painel para atualizar sozinho a cada 30 segundos
+# Aqui eu configuro o painel para se atualizar sozinho a cada 30 segundos, mantendo os dados sempre vivos
 st_autorefresh(interval=30000, limit=None, key="atualizacao_leads") 
 
-# Eu defino o título, o ícone da aba e deixo a tela bem larga
+# Defini o título da aba e deixei o layout em modo wide para aproveitar melhor o espaço da tela
 st.set_page_config(page_title="Dashboard - Leasing", page_icon="📊", layout="wide")
 
 st.title("📊 Painel de Inteligência Comercial (Live)")
 
-# Eu pego o endereço do banco de dados e abro a conexão segura com SSL
+# Pego a string de conexão nos secrets e abro a ponte com o banco exigindo SSL por segurança
 STRING_CONEXAO = st.secrets["DB_URI"]
 engine = create_engine(STRING_CONEXAO, connect_args={"ssl": {"ssl_mode": "REQUIRED"}})
 
-# Eu busco no banco as datas limites e as opções disponíveis para montar os filtros
+# Fiz essa consulta inicial bem leve só para descobrir as datas limites e preencher os filtros sem pesar
 try:
     with engine.connect() as conexao:
         df_meta = pd.read_sql("SELECT MIN(DATE(criado_em)) as min_date, MAX(DATE(criado_em)) as max_date, MAX(anos_cdl) as max_cdl FROM leads", conexao)
@@ -35,22 +35,21 @@ except Exception as e:
     st.error(f"Erro ao ligar à base de dados: {e}")
     st.stop()
 
-# Se o banco estiver vazio, eu aviso na tela e paro a execução por aqui
+# Caso o banco ainda esteja vazio, prefiro avisar na tela e interromper a execução por aqui mesmo
 if pd.isnull(df_meta['min_date'][0]):
     st.warning("Nenhum dado encontrado na base de dados. Ligue o robô gerador primeiro.")
     st.stop()
 
-# Eu guardo a menor data, a maior data e o maior tempo de experiência que encontrei
 min_date = df_meta['min_date'][0]
 max_date = df_meta['max_date'][0]
 max_cdl = int(df_meta['max_cdl'][0]) if pd.notnull(df_meta['max_cdl'][0]) else 40
 
-# Eu separo em listas os estados, rotas e tipos de trailer que existem no banco
+# Separo em listas os valores únicos que existem no banco para alimentar as caixas de seleção
 estados_com_dados = df_filtros_db['estado'].dropna().unique().tolist()
 rotas_com_dados = sorted(df_filtros_db['rota'].dropna().unique().tolist())
 trailers_com_dados = sorted(df_filtros_db['trailer'].dropna().unique().tolist())
 
-# Eu crio um dicionário para agrupar cada estado americano na sua respectiva região
+# Montei esse dicionário para agrupar as siglas dos estados americanos nas suas regiões geográficas
 MAPEAMENTO_REGIOES = {
     "CA": "West", "OR": "West", "WA": "West", "AK": "West", "HI": "West", "NV": "West", "ID": "West", "UT": "West", "MT": "West", "WY": "West", "CO": "West",
     "AZ": "Southwest", "NM": "Southwest", "TX": "Southwest", "OK": "Southwest",
@@ -59,12 +58,12 @@ MAPEAMENTO_REGIOES = {
     "AL": "Southeast", "FL": "Southeast", "GA": "Southeast", "KY": "Southeast", "MS": "Southeast", "NC": "Southeast", "SC": "Southeast", "TN": "Southeast", "VA": "Southeast", "WV": "Southeast", "AR": "Southeast", "LA": "Southeast"
 }
 
-# Eu cruzo os estados do banco com o meu dicionário para listar as regiões existentes
+# Cruzo os estados encontrados com o meu dicionário; se aparecer algum fora do padrão, jogo como 'Outro'
 df_regioes_temp = pd.DataFrame({'estado': estados_com_dados})
 df_regioes_temp['regiao'] = df_regioes_temp['estado'].map(MAPEAMENTO_REGIOES).fillna('Outro')
 regioes_unicas = sorted(df_regioes_temp['regiao'].unique())
 
-# Eu traduzo os nomes técnicos das colunas para ficarem bonitos nos gráficos
+# Traduzi os nomes técnicos das colunas para deixar os rótulos dos gráficos bem mais amigáveis
 LABELS_DICT = {
     'contagem': 'Volume de Leads',
     'faixa_experiencia': 'Tempo de CDL',
@@ -87,7 +86,7 @@ LABELS_DICT = {
     'taxa_qual': 'Taxa de Qualificação (%)'
 }
 
-# Eu crio uma função para voltar todos os filtros para o estado inicial quando eu clicar no botão
+# Criei essa função para limpar qualquer filtro aplicado e voltar tudo ao estado original com um clique
 def reset_filtros():
     st.session_state.filtro_data = (min_date, max_date)
     st.session_state.filtro_regiao = regioes_unicas
@@ -97,13 +96,13 @@ def reset_filtros():
     st.session_state.filtro_cdl = (0, max_cdl)
     st.session_state.filtro_qual = "Todos"
 
-# Eu inicio os valores padrão de estado e região na memória da sessão
+# Inicializo os estados e regiões na memória da sessão para evitar erros na primeira renderização
 if "filtro_estado" not in st.session_state:
     st.session_state.filtro_estado = sorted(estados_com_dados)
 if "filtro_regiao" not in st.session_state:
     st.session_state.filtro_regiao = regioes_unicas
 
-# Sempre que eu mudar a região escolhida, eu atualizo automaticamente a lista de estados
+# Fiz assim pois, quando o usuário escolhe uma região, os estados disponíveis precisam acompanhar essa seleção na hora
 def atualiza_estados_por_regiao():
     regioes_selecionadas = st.session_state.filtro_regiao
     if regioes_selecionadas:
@@ -112,7 +111,7 @@ def atualiza_estados_por_regiao():
         estados_correspondentes = sorted(estados_com_dados)
     st.session_state.filtro_estado = estados_correspondentes
 
-# Eu monto toda a barra lateral com os filtros interativos do painel
+# Aqui eu monto toda a barra lateral onde ficam os controles interativos do dashboard
 st.sidebar.header("🎛️ Filtros Globais")
 
 datas_selecionadas = st.sidebar.date_input("Período de Captação", [min_date, max_date], min_value=min_date, max_value=max_date, format="DD/MM/YYYY", key="filtro_data")
@@ -122,7 +121,7 @@ if len(datas_selecionadas) == 2:
 else:
     data_inicio = data_fim = datas_selecionadas[0]
 
-# Eu calculo o período anterior equivalente para comparar o crescimento nos cartões
+# Calculo exatamente quantos dias foram filtrados para buscar o mesmo intervalo logo antes e gerar os comparativos
 dias_selecionados = (data_fim - data_inicio).days + 1
 data_inicio_prev = data_inicio - datetime.timedelta(days=dias_selecionados)
 
@@ -152,7 +151,7 @@ filtro_qualificacao = st.sidebar.radio("Status de Qualificação", ["Todos", "Ap
 st.sidebar.markdown("---")
 st.sidebar.button("🔄 Resetar Filtros", use_container_width=True, on_click=reset_filtros)
 
-# Eu monto a consulta SQL dinâmica usando apenas o que foi selecionado nos filtros
+# Monto a query SQL de forma dinâmica; fiz assim para filtrar direto no banco e não trazer dados desnecessários
 if not estados_selecionados or not rotas_selecionadas or not trailers_selecionados:
     df_geral = pd.DataFrame()
 else:
@@ -186,26 +185,32 @@ else:
         st.error(f"Erro ao executar a consulta otimizada: {e}")
         df_geral = pd.DataFrame()
 
-# Eu treino os modelos de Machine Learning e guardo na memória por 5 minutos para não pesar o site
+# Uso o cache de recursos por 5 minutos para não precisar retreinar os modelos a cada auto-refresh de 30 segundos
 @st.cache_resource(ttl=300)
 def treinar_modelos_ml(df_treino):
-    features_cat = ['estado', 'trailer', 'rota', 'dor_cliente']
-    features_num_clf = ['anos_cdl', 'folgas', 'milhas', 'expectativa_ganho', 'empregado']
+    df_clean = df_treino.copy()
+
+    # Aqui eu crio variáveis derivadas (gap financeiro e ritmo diário de milhas) porque as árvores aprendem muito melhor com essas relações prontas
+    df_clean['gap_financeiro'] = df_clean['expectativa_ganho'] - df_clean['previsao_ganho']
+    df_clean['milhas_dia_ativo'] = df_clean['milhas'] / (30 - df_clean['folgas']).clip(lower=1)
+
+    features_cat = ['regiao', 'trailer', 'rota', 'dor_cliente']
+    features_num_clf = ['anos_cdl', 'folgas', 'milhas', 'expectativa_ganho', 'previsao_ganho', 'gap_financeiro', 'empregado']
     
-    # Eu limpo valores vazios e garanto que as colunas numéricas estejam no formato certo
-    df_clean = df_treino.dropna(subset=features_cat + features_num_clf + ['qualificou']).copy()
+    # Limpo possíveis valores nulos e garanto que as flags estejam como inteiros antes de treinar
+    df_clean = df_clean.dropna(subset=features_cat + features_num_clf + ['qualificou'])
     df_clean['empregado'] = df_clean['empregado'].astype(int)
     df_clean['qualificou'] = df_clean['qualificou'].astype(int)
 
     X_clf = df_clean[features_cat + features_num_clf]
     y_clf = df_clean['qualificou']
 
-    # Eu separo 80% dos dados para treinar o modelo e 20% para testar se ele acertou
+    # Separo 80% da base para treino e deixo 20% guardados para testar se o modelo realmente aprendeu
     X_train_c, X_test_c, y_train_c, y_test_c = train_test_split(
         X_clf, y_clf, test_size=0.2, random_state=42, stratify=y_clf
     )
 
-    # Eu preparo os textos com OneHotEncoder e padronizo a escala dos números
+    # Uso o ColumnTransformer para transformar textos em colunas binárias e colocar os números na mesma escala
     preprocessor_clf = ColumnTransformer(
         transformers=[
             ('cat', OneHotEncoder(handle_unknown='ignore'), features_cat),
@@ -213,30 +218,39 @@ def treinar_modelos_ml(df_treino):
         ]
     )
 
-    # Eu crio o fluxo completo do modelo Random Forest para prever qualificação
+    # Optei pelo class_weight='balanced' aqui pois temos bem menos aprovados que reprovados, e sem isso o modelo ignorava os leads bons
     pipeline_clf = Pipeline(steps=[
         ('preprocessor', preprocessor_clf),
-        ('classifier', RandomForestClassifier(n_estimators=150, max_depth=12, random_state=42, n_jobs=-1))
+        ('classifier', RandomForestClassifier(
+            n_estimators=200,
+            max_depth=10,
+            min_samples_leaf=4,
+            class_weight='balanced',
+            random_state=42,
+            n_jobs=-1
+        ))
     ])
 
     pipeline_clf.fit(X_train_c, y_train_c)
-    y_pred_c = pipeline_clf.predict(X_test_c)
 
-    # Eu calculo as notas de desempenho do modelo de classificação
+    # Baixei a régua de corte para 40% (0.40) para aumentar o Recall e não deixar oportunidades reais escaparem
+    probs_c = pipeline_clf.predict_proba(X_test_c)[:, 1]
+    y_pred_c = (probs_c >= 0.40).astype(int)
+
     metricas_clf = {
         'acuracia': accuracy_score(y_test_c, y_pred_c) * 100,
         'precisao': precision_score(y_test_c, y_pred_c, zero_division=0) * 100,
         'recall': recall_score(y_test_c, y_pred_c, zero_division=0) * 100
     }
 
-    # Eu descubro quais são as 10 variáveis que mais influenciam na aprovação do motorista
+    # Extraio o peso de cada variável para mostrar depois no gráfico o que mais pesa na aprovação de um motorista
     ohe_features = pipeline_clf.named_steps['preprocessor'].named_transformers_['cat'].get_feature_names_out(features_cat)
     todas_features = list(ohe_features) + features_num_clf
     importancias = pipeline_clf.named_steps['classifier'].feature_importances_
     df_imp = pd.DataFrame({'Feature': todas_features, 'Importância': importancias}).sort_values(by='Importância', ascending=False).head(10)
 
-    # Agora eu treino um segundo modelo para prever quanto o motorista espera ganhar
-    features_num_reg = ['anos_cdl', 'folgas', 'milhas', 'empregado']
+    # Para prever a expectativa salarial, troquei o estado pela região para evitar ruído e usei loss='huber' para o R² não sofrer tanto com valores extremos
+    features_num_reg = ['anos_cdl', 'folgas', 'milhas', 'milhas_dia_ativo', 'previsao_ganho', 'empregado']
     X_reg = df_clean[features_cat + features_num_reg]
     y_reg = df_clean['expectativa_ganho']
 
@@ -253,7 +267,15 @@ def treinar_modelos_ml(df_treino):
 
     pipeline_reg = Pipeline(steps=[
         ('preprocessor', preprocessor_reg),
-        ('regressor', GradientBoostingRegressor(n_estimators=150, learning_rate=0.08, max_depth=5, random_state=42))
+        ('regressor', GradientBoostingRegressor(
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=3,
+            subsample=0.8,
+            min_samples_leaf=5,
+            loss='huber',
+            random_state=42
+        ))
     ])
 
     pipeline_reg.fit(X_train_r, y_train_r)
@@ -266,13 +288,13 @@ def treinar_modelos_ml(df_treino):
 
     return pipeline_clf, metricas_clf, df_imp, pipeline_reg, metricas_reg
 
-# Eu isolo a aba de Machine Learning para que mexer nos simuladores não recarregue a página toda
+# Isolei essa aba com @st.fragment para que mexer nos controles do simulador não recarregue o painel inteiro
 @st.fragment
 def renderizar_aba_ml(df_dados):
     st.markdown("### 🤖 Laboratório Preditivo & Lead Scoring (Scikit-Learn)")
     st.write("Modelos supervisionados treinados sobre o histórico da operação para prever a propensão de qualificação, expectativa salarial e tendência futura de aprovações.")
 
-    # Eu verifico se há dados suficientes e variedade de resultados para treinar os algoritmos
+    # Garanto um volume mínimo de dados e pelo menos duas classes diferentes antes de rodar o treino
     if len(df_dados) < 50 or df_dados['qualificou'].nunique() < 2:
         st.warning("Volume de dados insuficiente ou apenas uma classe presente nos filtros atuais para treinar os modelos (mínimo de 50 leads com aprovados e reprovados).")
         return
@@ -280,7 +302,7 @@ def renderizar_aba_ml(df_dados):
     with st.spinner("Treinando pipelines de Machine Learning..."):
         clf_model, metricas_clf, df_imp, reg_model, metricas_reg = treinar_modelos_ml(df_dados)
 
-    # Eu mostro as métricas de precisão dos modelos no topo da aba
+    # Exibo as principais métricas de validação logo no topo para dar transparência sobre a assertividade dos modelos
     st.markdown("#### 📊 Performance dos Modelos (Validação 80/20)")
     m1, m2, m3, m4, m5 = st.columns(5)
     with m1:
@@ -297,7 +319,7 @@ def renderizar_aba_ml(df_dados):
     st.markdown("---")
     st.markdown("#### 🎯 Simulador de Pré-Qualificação de Lead")
 
-    # Eu crio os campos para simular um motorista novo e testar o modelo na hora
+    # Aqui eu monto o simulador interativo para testar perfis de motoristas em tempo real
     col_in1, col_in2, col_in3 = st.columns(3)
     with col_in1:
         sim_estado = st.selectbox("Estado (UF)", sorted(df_dados['estado'].unique()))
@@ -312,10 +334,17 @@ def renderizar_aba_ml(df_dados):
         sim_folgas = st.slider("Dias de Folga no Mês", min_value=1, max_value=15, value=4)
         sim_expectativa = st.number_input("Expectativa Informada pelo Lead ($)", min_value=500.0, max_value=6000.0, value=2000.0, step=50.0)
 
+    # Calculo as mesmas métricas derivadas do treino para o perfil que acabou de ser simulado na tela
     emp_bin = 1 if sim_empregado == "Empregado" else 0
+    sim_regiao = MAPEAMENTO_REGIOES.get(sim_estado, 'Outro')
+    mult_t = 0.83 if sim_trailer == "Dry Van" else (1.30 if sim_trailer == "Flatbed" else 1.10)
+    mult_r = 1.20 if sim_rota == 'OTR' else (0.90 if sim_rota == 'Regional' else 0.65)
+    sim_previsao = (sim_milhas * mult_t * mult_r) * (1 - (sim_folgas * 0.05))
+    sim_gap = sim_expectativa - sim_previsao
+    sim_milhas_dia = sim_milhas / max(1, (30 - sim_folgas))
 
     entrada_clf = pd.DataFrame([{
-        'estado': sim_estado,
+        'regiao': sim_regiao,
         'trailer': sim_trailer,
         'rota': sim_rota,
         'dor_cliente': sim_dor,
@@ -323,21 +352,24 @@ def renderizar_aba_ml(df_dados):
         'folgas': sim_folgas,
         'milhas': sim_milhas,
         'expectativa_ganho': sim_expectativa,
+        'previsao_ganho': sim_previsao,
+        'gap_financeiro': sim_gap,
         'empregado': emp_bin
     }])
 
     entrada_reg = pd.DataFrame([{
-        'estado': sim_estado,
+        'regiao': sim_regiao,
         'trailer': sim_trailer,
         'rota': sim_rota,
         'dor_cliente': sim_dor,
         'anos_cdl': sim_cdl,
         'folgas': sim_folgas,
         'milhas': sim_milhas,
+        'milhas_dia_ativo': sim_milhas_dia,
+        'previsao_ganho': sim_previsao,
         'empregado': emp_bin
     }])
 
-    # Eu peço para os modelos calcularem a chance de fechar negócio e o salário esperado
     prob_qualificacao = clf_model.predict_proba(entrada_clf)[0][1] * 100
     expectativa_estimada = reg_model.predict(entrada_reg)[0]
     diferenca_exp = sim_expectativa - expectativa_estimada
@@ -347,10 +379,10 @@ def renderizar_aba_ml(df_dados):
 
     with res1:
         st.markdown("##### Score de Qualificação (Random Forest)")
-        if prob_qualificacao >= 70:
+        if prob_qualificacao >= 65:
             st.success(f"🔥 **Alta Propensão de Fechamento:** {prob_qualificacao:.1f}%")
         elif prob_qualificacao >= 40:
-            st.warning(f"⚠️ **Média Propensão (Requer Contorno de Objeção):** {prob_qualificacao:.1f}%")
+            st.warning(f"⚠️ **Qualificado (Propensão Moderada - Atenção às Objeções):** {prob_qualificacao:.1f}%")
         else:
             st.error(f"❄️ **Baixa Propensão de Qualificação:** {prob_qualificacao:.1f}%")
         st.progress(int(prob_qualificacao))
@@ -368,16 +400,15 @@ def renderizar_aba_ml(df_dados):
     st.markdown("---")
     st.markdown("#### 📈 Projeção de Leads Qualificados (Regressão Linear)")
     
-    # Eu permito escolher quantos meses para frente quero projetar no gráfico
     meses_futuros = st.slider("Horizonte de Projeção (Meses Futuros)", min_value=2, max_value=12, value=4)
     
-    # Eu agrupo os dados por mês para contar quantos leads qualificaram em cada período
+    # Agrupo os leads qualificados por mês para construir a série histórica da regressão linear
     df_mensal = df_dados.copy()
     df_mensal['mes_ano'] = df_mensal['criado_em'].dt.to_period('M')
     df_serie = df_mensal.groupby('mes_ano')['qualificou'].sum().reset_index()
     df_serie = df_serie.sort_values('mes_ano').reset_index(drop=True)
 
-    # Se houver pelo menos 2 meses de histórico, eu traço a linha de tendência e o futuro
+    # Com pelo menos dois meses de histórico, ajusto a reta de tendência e projeto os próximos meses
     if len(df_serie) >= 2:
         df_serie['indice_tempo'] = np.arange(len(df_serie))
         X_lin = df_serie[['indice_tempo']].values
@@ -392,7 +423,6 @@ def renderizar_aba_ml(df_dados):
         ultimo_indice = df_serie['indice_tempo'].iloc[-1]
         ultimo_periodo = df_serie['mes_ano'].iloc[-1]
 
-        # Eu gero os meses futuros e calculo a previsão de qualificados para cada um
         indices_futuros = np.arange(ultimo_indice + 1, ultimo_indice + 1 + meses_futuros).reshape(-1, 1)
         previsoes_futuras = np.maximum(0, lr_model.predict(indices_futuros))
         periodos_futuros = [(ultimo_periodo + i).strftime('%Y-%m') for i in range(1, meses_futuros + 1)]
@@ -442,7 +472,6 @@ def renderizar_aba_ml(df_dados):
         st.info("Selecione um período maior nos filtros (pelo menos 2 meses distintos) para calcular a linha de regressão linear.")
 
     st.markdown("---")
-    # Eu desenho um gráfico de barras mostrando o que mais pesa na decisão do modelo
     fig_imp = px.bar(
         df_imp.sort_values(by='Importância', ascending=True),
         x='Importância',
@@ -455,12 +484,11 @@ def renderizar_aba_ml(df_dados):
     fig_imp.update_layout(xaxis_title="Peso Relativo (Gini Importance)", yaxis_title="Variável")
     st.plotly_chart(fig_imp, use_container_width=True)
 
-# Trouxe os dados vindos do banco e criei colunas novas para facilitar os gráficos
 if not df_geral.empty:
     df_geral['criado_em'] = pd.to_datetime(df_geral['criado_em'])
     df_geral['data_criacao'] = df_geral['criado_em'].dt.date
     
-    # Se a coluna de previsão de ganho não vier pronta, eu calculo usando as regras de rota e trailer
+    # Caso a coluna de previsão de ganho não venha calculada do banco, aplico a regra de negócio aqui mesmo
     if 'previsao_ganho' not in df_geral.columns:
         def calc_previsao(row):
             mult_trailer = 0.83 if row['trailer'] == "Dry Van" else (1.30 if row['trailer'] == "Flatbed" else 1.10)
@@ -468,7 +496,7 @@ if not df_geral.empty:
             return (row['milhas'] * mult_trailer * mult_rota) * (1 - (row['folgas'] * 0.05))
         df_geral['previsao_ganho'] = df_geral.apply(calc_previsao, axis=1)
 
-    # Aqui eu agrupo os anos de experiência em faixas para facilitar a leitura
+    # Faço esse corte em faixas de experiência para os gráficos de perfil não ficarem poluídos com dezenas de barras
     faixas_cdl = [-1, 5, 10, 15, 20, 25, 100]
     labels_cdl = ['0-5 anos', '6-10 anos', '11-15 anos', '16-20 anos', '21-25 anos', '26+ anos']
     df_geral['faixa_experiencia'] = pd.cut(df_geral['anos_cdl'], bins=faixas_cdl, labels=labels_cdl)
@@ -476,14 +504,14 @@ if not df_geral.empty:
     df_geral['status_emprego'] = df_geral['empregado'].map({1: 'Empregado', 0: 'Desempregado', True: 'Empregado', False: 'Desempregado'})
     df_geral['regiao'] = df_geral['estado'].map(MAPEAMENTO_REGIOES).fillna('Outro')
 
-    # Dividi os dados entre o período anterior (para comparação) e o período atual filtrado
+    # Faço o corte temporal entre o período atual e o anterior para alimentar os indicadores de variação
     df_prev = df_geral[(df_geral['data_criacao'] >= data_inicio_prev) & (df_geral['data_criacao'] < data_inicio)]
     df_filtrado = df_geral[(df_geral['data_criacao'] >= data_inicio) & (df_geral['data_criacao'] <= data_fim)]
 
     if df_filtrado.empty:
         st.warning("Nenhum dado corresponde aos filtros no período atual selecionado.")
     else:
-        # Aqui eu crio as 6 abas de navegação do dashboard
+        # Estruturo as 6 abas principais para dividir a análise entre visão executiva, geografia, perfil, finanças, operação e ML
         tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "Visão Executiva", 
             "Inteligência Geográfica", 
@@ -493,7 +521,6 @@ if not df_geral.empty:
             "🤖 Previsões (ML)"
         ])
         
-        # Aba 1: Resumo geral, evolução no tempo, funil e últimos registros
         with tab1:
             total_leads = len(df_filtrado)
             leads_qualificados = len(df_filtrado[df_filtrado['qualificou'] == 1])
@@ -554,7 +581,6 @@ if not df_geral.empty:
             })
             st.dataframe(df_tabela, use_container_width=True)
 
-        # Aba 2: Mapas e distribuição por estados e regiões
         with tab2:
             col_geo1, col_geo2 = st.columns([6, 4])
             
@@ -608,7 +634,6 @@ if not df_geral.empty:
                 fig_treemap.update_layout(margin=dict(l=0, r=0, t=40, b=0))
                 st.plotly_chart(fig_treemap, use_container_width=True)
 
-        # Aba 3: Perfil detalhado do motorista ideal, dores e experiência
         with tab3:
             col_icp1, col_icp2 = st.columns(2)
             
@@ -686,7 +711,6 @@ if not df_geral.empty:
                 fig_qual_emp.update_layout(xaxis_title="Situação Atual", yaxis_title="Volume de Leads")
                 st.plotly_chart(fig_qual_emp, use_container_width=True)
 
-        # Aba 4: Comparação entre o salário que o motorista quer e o que a operação paga
         with tab4:
             col_fin1, col_fin2 = st.columns(2)
             
@@ -747,7 +771,6 @@ if not df_geral.empty:
                 fig_exp_emp.update_layout(showlegend=False, xaxis_title="Situação Atual", yaxis_title="Expectativa ($)")
                 st.plotly_chart(fig_exp_emp, use_container_width=True)
 
-        # Aba 5: Análise operacional de milhas rodadas, folgas e valor por milha
         with tab5:
             col_op1, col_op2 = st.columns(2)
             
@@ -802,7 +825,7 @@ if not df_geral.empty:
                 fig_folgas_rota.update_layout(showlegend=False, xaxis_title="Rota", yaxis_title="Dias de Folga (Mês)")
                 st.plotly_chart(fig_folgas_rota, use_container_width=True)
 
-        # Aba 6: Chamo a função de Machine Learning passando todos os dados filtrados
+        # Passo df_geral inteiro para os modelos treinarem com toda a janela filtrada (incluindo o período comparativo)
         with tab6:
             renderizar_aba_ml(df_geral)
 else:
